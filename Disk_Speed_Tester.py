@@ -29,7 +29,7 @@
     python disk_speed_tester.py
 
   Author      : SpaceSquare & Claude Code AI
-  Version     : 3.3
+  Version     : 3.4
   License     : MIT
 ================================================================================
 """
