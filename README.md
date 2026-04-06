@@ -1,4 +1,3 @@
-================================================================================
   DISK I/O SPEED TESTER  —  README
   Version : 3.4
   File    : Disk_Speed_Tester.py
