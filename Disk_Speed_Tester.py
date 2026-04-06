@@ -62,7 +62,7 @@ from PyQt5.QtWidgets import (
 TRANSLATIONS = {
     "en": {
         # Window / titles
-        "app_title":            "Disk I/O Speed Tester v3.0",
+        "app_title":            "Disk I/O Speed Tester v3.4",
         "tab_test":             "Speed Test",
         "tab_drives":           "Drive Info",
         "tab_results":          "Results History",
@@ -148,7 +148,7 @@ TRANSLATIONS = {
         # Webhook embed strings
         "embed_title_single":   "Disk Speed Test Report",
         "embed_title_all":      "All Drives Speed Test Report",
-        "embed_footer":         "Disk Speed Tester v3.0",
+        "embed_footer":         "Disk Speed Tester v3.4",
         "embed_drive":          "Drive",
         "embed_mount":          "Mount Point",
         "embed_fs":             "File System",
@@ -209,11 +209,11 @@ TRANSLATIONS = {
         "report_start_ts":          "Test Started",
         "report_end_ts":            "Test Completed",
         "report_section_summary":   "SUMMARY (ALL DRIVES)",
-        "report_footer":            "End of Report — Disk Speed Tester v3.1",
+        "report_footer":            "End of Report — Disk Speed Tester v3.4",
     },
 
     "zh-TW": {
-        "app_title":            "磁碟 I/O 速度測試工具 v3.0",
+        "app_title":            "磁碟 I/O 速度測試工具 v3.4",
         "tab_test":             "速度測試",
         "tab_drives":           "磁碟資訊",
         "tab_results":          "歷史結果",
@@ -290,7 +290,7 @@ TRANSLATIONS = {
 
         "embed_title_single":   "磁碟速度測試報告",
         "embed_title_all":      "所有磁碟速度測試報告",
-        "embed_footer":         "磁碟速度測試工具 v3.0",
+        "embed_footer":         "磁碟速度測試工具 v3.4",
         "embed_drive":          "磁碟",
         "embed_mount":          "掛載點",
         "embed_fs":             "檔案系統",
@@ -355,7 +355,7 @@ TRANSLATIONS = {
     },
 
     "zh-CN": {
-        "app_title":            "磁盘 I/O 速度测试工具 v3.0",
+        "app_title":            "磁盘 I/O 速度测试工具 v3.4",
         "tab_test":             "速度测试",
         "tab_drives":           "磁盘信息",
         "tab_results":          "历史结果",
@@ -432,7 +432,7 @@ TRANSLATIONS = {
 
         "embed_title_single":   "磁盘速度测试报告",
         "embed_title_all":      "所有磁盘速度测试报告",
-        "embed_footer":         "磁盘速度测试工具 v3.0",
+        "embed_footer":         "磁盘速度测试工具 v3.4",
         "embed_drive":          "磁盘",
         "embed_mount":          "挂载点",
         "embed_fs":             "文件系统",
@@ -760,10 +760,14 @@ class WebhookSender:
         self.url  = url
         self.lang = lang
 
-    def _post(self, payload: dict) -> bool:
-        """POST a JSON payload; return True on success."""
+    def _post(self, payload: dict) -> tuple[bool, str]:
+        """
+        POST a JSON payload to the webhook URL.
+        Returns (True, "") on success, or (False, error_message) on failure.
+        Error messages are human-readable and suitable for logging/display.
+        """
         if not self.url:
-            return False
+            return False, "No webhook URL configured"
         try:
             resp = requests.post(
                 self.url,
@@ -771,9 +775,21 @@ class WebhookSender:
                 headers={"Content-Type": "application/json"},
                 timeout=10,
             )
-            return resp.status_code in (200, 204)
-        except requests.exceptions.RequestException:
-            return False
+            if resp.status_code in (200, 204):
+                return True, ""
+            # Include HTTP status + Discord error body for diagnosis
+            try:
+                body = resp.json()
+                detail = body.get("message", resp.text[:120])
+            except Exception:
+                detail = resp.text[:120]
+            return False, f"HTTP {resp.status_code}: {detail}"
+        except requests.exceptions.Timeout:
+            return False, "Request timed out (10 s)"
+        except requests.exceptions.ConnectionError as exc:
+            return False, f"Connection error: {exc}"
+        except requests.exceptions.RequestException as exc:
+            return False, f"Request error: {exc}"
 
     def send_single_result(self, result: dict) -> bool:
         """Send a detailed embed for a single drive result."""
@@ -867,7 +883,7 @@ class WebhookSender:
         overall_avg = sum(r["avg_speed"] for r in results) / len(results)
 
         description = (
-            "\n".join(lines)
+            "\n".join(line.rstrip("\n") for line in lines)
             + f"\n━━━━━━━━━━━━━━━━━━━━━\n"
             f"**{tr(L, 'embed_drives_tested')}:** `{len(results)}`\n"
             f"**{tr(L, 'embed_end_time')}:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n"
@@ -1154,6 +1170,9 @@ class ReportGenerator:
 class MainWindow(QMainWindow):
     """Primary application window."""
 
+    # Custom signal for thread-safe log messages (emitted from worker threads)
+    _log_signal = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
 
@@ -1174,6 +1193,9 @@ class MainWindow(QMainWindow):
         self._apply_dark_theme()
         self._refresh_drives()
         self._update_window_title()
+
+        # Connect thread-safe log signal to the append_log slot
+        self._log_signal.connect(self._append_log)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -1581,10 +1603,46 @@ class MainWindow(QMainWindow):
         self._add_table_row(result)
         self._update_results_text()
 
-        # Send to webhook
+        # Send to webhook in a background thread to avoid blocking the GUI
         if self._wh_enabled and self._webhook:
-            sender = WebhookSender(self._webhook, self._lang)
-            sender.send_single_result(result)
+            self._send_webhook_async(
+                "single",
+                result=result,
+                label=result.get("device", "drive"),
+            )
+
+    def _send_webhook_async(self, mode: str, result: dict = None,
+                            results: list = None, label: str = ""):
+        """
+        Fire-and-forget webhook POST executed in a daemon thread so the GUI
+        thread is never blocked.  Logs success / failure to the activity log.
+        """
+        import threading
+
+        webhook_url = self._webhook
+        lang        = self._lang
+        wh_enabled  = self._wh_enabled
+
+        def _worker():
+            sender = WebhookSender(webhook_url, lang)
+            if mode == "single" and result is not None:
+                ok, err = sender.send_single_result(result)
+            elif mode == "all" and results is not None:
+                ok, err = sender.send_all_results(results)
+            else:
+                return
+
+            # Emit log signal — safe to call from any thread because
+            # _log_signal is connected with Qt.QueuedConnection by default
+            if ok:
+                self._log_signal.emit(f"📡  Webhook sent OK  [{label}]")
+            else:
+                self._log_signal.emit(f"❌  Webhook FAILED  [{label}]: {err}")
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+
 
     def _on_error(self, msg: str):
         self._append_log(f"❌  {msg}")
@@ -1595,10 +1653,13 @@ class MainWindow(QMainWindow):
         self._lbl_status.setText(tr(self._lang, "status_done"))
         self._statusbar.showMessage(tr(self._lang, "status_done"))
 
-        # Send summary webhook for multi-drive
+        # Send summary webhook for multi-drive (async, non-blocking)
         if len(self._results) > 1 and self._wh_enabled and self._webhook:
-            sender = WebhookSender(self._webhook, self._lang)
-            sender.send_all_results(self._results)
+            self._send_webhook_async(
+                "all",
+                results=list(self._results),
+                label="all drives summary",
+            )
 
         # Auto-download report if the option is checked
         if self._auto_dl_report and self._results:

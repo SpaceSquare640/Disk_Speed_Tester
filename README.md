@@ -1,6 +1,6 @@
-
+================================================================================
   DISK I/O SPEED TESTER  —  README
-  Version : 3.3
+  Version : 3.4
   File    : Disk_Speed_Tester.py
 ================================================================================
 
@@ -74,14 +74,14 @@ USAGE
   3. Click "Test Selected Drive" or "Test All Drives".
   4. Watch the live progress bars and speed readouts.
   5. Results appear in the table below when the test finishes.
+  6. Webhook send status (OK or error reason) appears in the Activity Log.
 
   Changing Language
   -----------------
   * Open the Settings tab.
   * Under "Language", select English, Traditional Chinese (繁體中文), or
     Simplified Chinese (简体中文) from the drop-down.
-  * The entire UI — all tabs, buttons, labels, group boxes, table headers,
-    and status bar — switches immediately with no restart required.
+  * The entire UI switches immediately with no restart required.
   * The chosen language is saved and restored automatically on next launch.
 
   Downloading the Test Report
@@ -142,6 +142,7 @@ DISCORD WEBHOOK SETUP
   2. Go to  Integrations > Webhooks > New Webhook.
   3. Choose a channel, copy the Webhook URL.
   4. In the app, open the Settings tab, paste the URL, and click Save.
+  5. Click "Test Connection" to verify the URL before running a test.
 
   Each completed drive test sends one embed containing:
     * Webhook URL (masked for security - domain + path prefix only)
@@ -159,6 +160,9 @@ DISCORD WEBHOOK SETUP
 
   When "Test All Drives" finishes, an additional ranked summary embed is
   sent showing all drives sorted by average speed.
+
+  Webhook send results (success or failure with error detail) are shown
+  in the Activity Log on the Speed Test tab.
 
 
 PERFORMANCE RATING SCALE
@@ -185,12 +189,16 @@ NOTES AND LIMITATIONS
     (named _dst_<timestamp>.tmp) and can be safely deleted manually.
   * Storage protocol detection is heuristic-based (device path + FS type).
     For authoritative interface info use OS-level tools (lsblk, WMI, etc.)
+  * Webhook POSTs run in background threads — the GUI never freezes waiting
+    for a network response.
 
 
 PROJECT STRUCTURE
 -----------------
   Disk_Speed_Tester.py   -  Main application (single file)
-  README.txt             -  This file
+  README.md              -  This file
+  Release.md             -  Release notes
+  .gitignore             -  Git ignore rules
 
 
 LICENSE
@@ -221,45 +229,54 @@ LICENSE
 
 CHANGELOG
 ---------
+  v3.4  -  Webhook bug fixes
+            [CRITICAL] Webhook POSTs now run in a background daemon thread
+              — GUI thread is never blocked waiting for network response,
+              and timeouts no longer freeze the application for 10 seconds.
+            [CRITICAL] _post() now returns (bool, error_str) instead of
+              bare bool — failure reason (HTTP status + Discord error body,
+              timeout, connection error) is captured and surfaced.
+            [CRITICAL] Webhook send result is now logged to the Activity
+              Log for every attempt: "📡 Webhook sent OK" or
+              "❌ Webhook FAILED: <reason>" — users can see exactly why
+              a send failed instead of it silently disappearing.
+            [CRITICAL] _post() now reports HTTP error body from Discord
+              (e.g. "Unknown Webhook", "Invalid Form Body") making URL
+              misconfiguration immediately diagnosable.
+            [BUG] send_all_results: fixed double blank lines in Discord
+              embed caused by joining strings that already contained
+              trailing newline characters.
+            _send_webhook_async() helper added for thread-safe fire-and-
+              forget webhook dispatch with pyqtSignal log feedback.
+            _log_signal = pyqtSignal(str) added to MainWindow for
+              thread-safe log updates from background threads.
+
   v3.3  -  Live language switching (bug fix)
             [CRITICAL] Language change now applies instantly to all UI
-              elements — tabs, group boxes, labels, buttons, checkboxes,
-              table column headers, status bar — with no restart required.
-              Root cause: _on_language_change() only saved the setting and
-              updated the window title; it never updated any widget text.
-            Added _retranslate_ui() method that updates every translatable
-              widget in-place when the user selects a new language.
-            All group boxes (QGroupBox) are now stored as self._grp_*
-              instance attributes so _retranslate_ui() can reach them.
-            All static QLabels that needed retranslation are now stored as
-              self._lbl_* instance attributes.
+              elements with no restart required.
+            Added _retranslate_ui() method.
+            All QGroupBox instances stored as self._grp_* attributes.
+            All static QLabels stored as self._lbl_* attributes.
             Removed misleading "restart to apply" status bar message.
 
   v3.2  -  Bug fixes (static analysis pass)
             [CRITICAL] Fixed get_drives() missing its def line
             [CRITICAL] Removed duplicate detect_protocol() function
-            [MINOR] Removed 6 dead imports (platform, threading, json,
-              QPalette, QIcon, QTimer)
+            [MINOR] Removed 6 dead imports
             [MINOR] Removed 30 orphaned translation dict entries
 
   v3.1  -  Download Report feature
             Download Report button with native OS file-save dialog
             Auto-download report after test checkbox option
-            Detailed report content: webhook URL, drive name/ID, storage
-            protocol, total/used/free capacity in both MB and GB,
-            test results in MB/s, performance ratings, timestamps
-            Webhook embeds updated: storage protocol, used space,
-            dual MB+GB capacity units, masked webhook URL
-            ReportGenerator class for structured plain-text output
-            detect_storage_protocol() heuristic (NVMe/SATA/USB/Network)
+            Detailed report content with full drive and webhook info
+            Webhook embeds with storage protocol, used space, MB+GB units
 
   v3.0  -  Complete rewrite
             PyQt5 GUI with dark Catppuccin-inspired theme
             Live progress bars and speed indicators
             Multi-language support (EN / zh-TW / zh-CN)
-            Structured Discord embeds with detailed formatting
+            Structured Discord embeds
             Configurable Webhook URL via Settings tab
-            Results export and persistent settings
             Removed hardcoded Webhook credentials from source
 
   v2.0  -  Original CLI version
